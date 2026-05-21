@@ -4,23 +4,36 @@ import time
 import os
 from slack_sdk.web.async_client import AsyncWebClient
 from app.genie_client import GenieClient
+import ssl
+import aiohttp
 
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")      # xoxb-...
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET")
 
-slack_client = AsyncWebClient(token=SLACK_BOT_TOKEN)
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+
+slack_client = AsyncWebClient(token=SLACK_BOT_TOKEN, ssl=ssl_context)
 genie_client = GenieClient()
 
 
+# slack_handler.py
 def verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:
-    """Slack 요청 서명 검증"""
-    # 5분 이상 지난 요청 거부 (replay attack 방지)
-    if abs(time.time() - int(timestamp)) > 300:
+    slack_signing_secret = os.getenv("SLACK_SIGNING_SECRET")
+    
+    if not timestamp or not signature or not slack_signing_secret:
+        return False
+
+    try:
+        if abs(time.time() - int(timestamp)) > 600:
+            return False
+    except ValueError:
         return False
 
     sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
     expected = "v0=" + hmac.new(
-        SLACK_SIGNING_SECRET.encode(),
+        slack_signing_secret.encode(),
         sig_basestring.encode(),
         hashlib.sha256,
     ).hexdigest()

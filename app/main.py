@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from app.slack_handler import verify_slack_signature, handle_slash_command
 
@@ -17,6 +20,15 @@ async def sql_ask(request: Request, background_tasks: BackgroundTasks):
     - 즉시 200 응답 (3초 제한)
     - 백그라운드에서 Genie API 호출 후 스레드 답변
     """
+
+    # challenge 검증 먼저 확인
+    try:
+        body_json = await request.json()
+        if body_json.get("type") == "url_verification":
+            return {"challenge": body_json.get("challenge")}
+    except:
+        pass
+
     body = await request.body()
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     signature = request.headers.get("X-Slack-Signature", "")
@@ -43,3 +55,13 @@ async def sql_ask(request: Request, background_tasks: BackgroundTasks):
 
     # Slack에 즉시 빈 응답 (처리 중 메시지는 background에서 전송)
     return {"response_type": "in_channel", "text": ""}
+
+@app.post("/slack/mention")
+async def mention(request: Request, background_tasks: BackgroundTasks):
+    body = await request.json()
+    
+    # Slack URL 검증 (최초 1회)
+    if body.get("type") == "url_verification":
+        return {"challenge": body.get("challenge")}
+    
+    # 이벤트 처리

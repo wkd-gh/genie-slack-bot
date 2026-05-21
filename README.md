@@ -97,7 +97,9 @@ cp .env.example .env
 # .env 파일에 실제 값 채우기
 
 # 4. 서버 실행
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000 # 터미널 1 - 서버 실행
+
+ngrok http 8000 # 터미널 2 - ngrok 터널 생성
 ```
 
 ### Cloud Run 배포
