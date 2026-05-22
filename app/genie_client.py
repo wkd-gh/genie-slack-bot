@@ -129,10 +129,13 @@ class GenieClient:
     ) -> list:
         """쿼리 결과 가져오기 (별도 API 호출)"""
         try:
-            response = await client.get(
-                f"{self.base_url}/conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}/query-result",
-                headers=self.headers,
-            )
+            url = f"{self.base_url}/conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}/query-result"
+            print(f"DEBUG query-result URL: {url}")
+            response = await client.get(url, headers=self.headers)
+            print(f"DEBUG query-result status: {response.status_code}")
+            # print(f"DEBUG query-result response: {response.text[:500]}")
+            print(f"DEBUG query-result response: {response.text}")  # [:500] 제거
+
             if response.status_code != 200:
                 return []
 
@@ -145,14 +148,20 @@ class GenieClient:
                 .get("schema", {})
                 .get("columns", [])
             ]
-            rows_raw = statement_response.get("result", {}).get("data_typed_array", [])
+            # rows_raw = statement_response.get("result", {}).get("data_typed_array", [])
+            rows_raw = statement_response.get("result", {}).get("data_array", [])
 
             rows = []
+            # for row in rows_raw:
+            #     values = [v.get("str", "") for v in row.get("values", [])]
+            #     rows.append(dict(zip(columns, values)))
             for row in rows_raw:
-                values = [v.get("str", "") for v in row.get("values", [])]
-                rows.append(dict(zip(columns, values)))
+                rows.append(dict(zip(columns, row)))
 
             return rows
 
-        except Exception:
+        except Exception as e:
+            print(f"DEBUG query-result error: {e}")
+            import traceback
+            traceback.print_exc()
             return []
