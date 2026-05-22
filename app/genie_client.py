@@ -2,25 +2,33 @@ import httpx
 import asyncio
 import os
 
-DATABRICKS_HOST = os.getenv("DATABRICKS_HOST")       # dbc-xxxx.cloud.databricks.com
-DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")      # dapi...
-GENIE_SPACE_ID = os.getenv("GENIE_SPACE_ID")          # Genie Space ID
-
 
 class GenieClient:
-    def __init__(self):
-        self.base_url = f"https://{DATABRICKS_HOST}/api/2.0/genie/spaces/{GENIE_SPACE_ID}"
-        self.headers = {
-            "Authorization": f"Bearer {DATABRICKS_TOKEN}",
+
+    @property
+    def base_url(self):
+        host = os.getenv("DATABRICKS_HOST")
+        space_id = os.getenv("GENIE_SPACE_ID")
+        return f"https://{host}/api/2.0/genie/spaces/{space_id}"
+
+    @property
+    def headers(self):
+        token = os.getenv("DATABRICKS_TOKEN")
+        return {
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
 
-    async def ask(self, question: str) -> str:
+    async def ask(self, question: str) -> dict:
         """
         Genie API에 질문하고 답변 반환
-        1. 새 대화 시작
-        2. 답변 폴링
-        3. 결과 반환
+        Returns: {
+            "text": str | None,
+            "query": {"sql": str, "description": str} | None,
+            "query_result": [{"col": "val", ...}] | None,
+            "suggested_questions": [str],
+            "error": str | None,  # "rate_limit" | "timeout" | 기타 에러 메시지
+        }
         """
         async with httpx.AsyncClient(timeout=120.0) as client:
 
@@ -30,6 +38,11 @@ class GenieClient:
                 headers=self.headers,
                 json={"content": question},
             )
+
+            # 429 Rate Limit 처리
+            if response.status_code == 429:
+                return {"error": "rate_limit", "text": None, "query": None, "query_result": None, "suggested_questions": []}
+
             response.raise_for_status()
             data = response.json()
 
@@ -37,14 +50,13 @@ class GenieClient:
             message_id = data["message_id"]
 
             # 2. 답변 완료될 때까지 폴링
-            result = await self._poll_message(client, conversation_id, message_id)
-            return result
+            return await self._poll_message(client, conversation_id, message_id)
 
     async def _poll_message(
         self, client: httpx.AsyncClient, conversation_id: str, message_id: str
-    ) -> str:
+    ) -> dict:
         """답변이 완료될 때까지 폴링"""
-        max_attempts = 30  # 최대 60초 대기
+        max_attempts = 30
         for _ in range(max_attempts):
             response = await client.get(
                 f"{self.base_url}/conversations/{conversation_id}/messages/{message_id}",
@@ -52,59 +64,95 @@ class GenieClient:
             )
             response.raise_for_status()
             data = response.json()
-
             status = data.get("status")
 
             if status == "COMPLETED":
-                return self._extract_answer(data)
+                return await self._parse_response(client, conversation_id, message_id, data)
             elif status in ("FAILED", "CANCELLED"):
-                return f"❌ 질문 처리 실패: {data.get('error', '알 수 없는 오류')}"
+                return {
+                    "error": data.get("error", "알 수 없는 오류"),
+                    "text": None, "query": None, "query_result": None, "suggested_questions": []
+                }
 
             await asyncio.sleep(2)
 
-        return "⏱️ 응답 시간이 초과됐어요. 다시 시도해주세요."
+        return {"error": "timeout", "text": None, "query": None, "query_result": None, "suggested_questions": []}
 
-    def _extract_answer(self, data: dict) -> str:
-        """응답 데이터에서 답변 텍스트 추출"""
-        attachments = data.get("attachments", [])
+    async def _parse_response(
+        self,
+        client: httpx.AsyncClient,
+        conversation_id: str,
+        message_id: str,
+        data: dict,
+    ) -> dict:
+        """COMPLETED 응답 파싱"""
+        result = {
+            "text": None,
+            "query": None,
+            "query_result": None,
+            "suggested_questions": [],
+            "error": None,
+        }
 
-        for attachment in attachments:
+        for attachment in data.get("attachments", []):
+            attachment_id = attachment.get("attachment_id", "")
+
             # 텍스트 답변
-            if attachment.get("type") == "text":
-                return attachment.get("content", "")
+            if "text" in attachment:
+                result["text"] = attachment["text"].get("content", "")
 
-            # 쿼리 결과 테이블
-            if attachment.get("type") == "query":
-                query = attachment.get("query", {})
-                description = query.get("description", "")
-                sql = query.get("query", "")
-                result = self._format_query_result(attachment.get("query_result", {}))
-                return f"{description}\n\n```sql\n{sql}\n```\n\n{result}"
+            # 쿼리 (SQL + 설명)
+            elif "query" in attachment:
+                query = attachment["query"]
+                result["query"] = {
+                    "sql": query.get("query", ""),
+                    "description": query.get("description", ""),
+                    "title": query.get("title", ""),
+                }
+                # 쿼리 결과 별도 API 호출
+                result["query_result"] = await self._fetch_query_result(
+                    client, conversation_id, message_id, attachment_id
+                )
 
-        return data.get("content", "답변을 가져올 수 없어요.")
+            # 추천 질문
+            elif "suggested_questions" in attachment:
+                result["suggested_questions"] = attachment["suggested_questions"].get("questions", [])
 
-    def _format_query_result(self, query_result: dict) -> str:
-        """쿼리 결과를 테이블 형식으로 포맷"""
-        if not query_result:
-            return ""
+        return result
 
-        columns = [col["name"] for col in query_result.get("statement_response", {}).get("manifest", {}).get("schema", {}).get("columns", [])]
-        rows = query_result.get("statement_response", {}).get("result", {}).get("data_typed_array", [])
+    async def _fetch_query_result(
+        self,
+        client: httpx.AsyncClient,
+        conversation_id: str,
+        message_id: str,
+        attachment_id: str,
+    ) -> list:
+        """쿼리 결과 가져오기 (별도 API 호출)"""
+        try:
+            response = await client.get(
+                f"{self.base_url}/conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}/query-result",
+                headers=self.headers,
+            )
+            if response.status_code != 200:
+                return []
 
-        if not columns or not rows:
-            return ""
+            data = response.json()
+            statement_response = data.get("statement_response", {})
+            columns = [
+                col["name"]
+                for col in statement_response
+                .get("manifest", {})
+                .get("schema", {})
+                .get("columns", [])
+            ]
+            rows_raw = statement_response.get("result", {}).get("data_typed_array", [])
 
-        # 헤더
-        header = " | ".join(columns)
-        separator = " | ".join(["---"] * len(columns))
-        lines = [header, separator]
+            rows = []
+            for row in rows_raw:
+                values = [v.get("str", "") for v in row.get("values", [])]
+                rows.append(dict(zip(columns, values)))
 
-        # 데이터 행 (최대 20행)
-        for row in rows[:20]:
-            values = [str(v.get("str", "")) for v in row.get("values", [])]
-            lines.append(" | ".join(values))
+            return rows
 
-        if len(rows) > 20:
-            lines.append(f"_... 외 {len(rows) - 20}개 행_")
-
-        return "\n".join(lines)
+        except Exception:
+            return []
