@@ -3,6 +3,8 @@ import hashlib
 import time
 import os
 import ssl
+import sqlparse
+from tabulate import tabulate
 from slack_sdk.web.async_client import AsyncWebClient
 from app.genie_client import GenieClient
 
@@ -41,30 +43,62 @@ def verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-def _format_table(rows: list, max_rows: int = 10) -> str:
-    """쿼리 결과를 고정폭 텍스트 테이블로 포맷"""
+def _loading_blocks(user_id: str, question: str) -> list:
+    """처리 중 블록"""
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*<@{user_id}>님의 질문*\n> {question}"}
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "Databricks 테이블 분석 중 :loading-dots:"}
+        }
+    ]
+
+
+def _format_table(rows: list, max_chars: int = 2500) -> str:
     if not rows:
         return ""
 
-    columns = list(rows[0].keys())
-    col_widths = {col: len(col) for col in columns}
-    for row in rows[:max_rows]:
-        for col in columns:
-            col_widths[col] = max(col_widths[col], len(str(row.get(col, ""))))
+    total_rows = len(rows)
+    for limit in range(min(20, total_rows), 0, -1):
+        table = tabulate(
+            [list(row.values()) for row in rows[:limit]],
+            headers=list(rows[0].keys()),
+            tablefmt="simple",
+        )
+        if len(table) <= max_chars:
+            if limit < total_rows:
+                table += f"\n... 외 {total_rows - limit}개 행"
+            return table
 
-    header    = " | ".join(col.ljust(col_widths[col]) for col in columns)
-    separator = "-+-".join("-" * col_widths[col] for col in columns)
-    lines = [header, separator]
+    return "결과가 너무 길어 표시할 수 없어요."
 
-    for row in rows[:max_rows]:
-        line = " | ".join(str(row.get(col, "")).ljust(col_widths[col]) for col in columns)
-        lines.append(line)
+# def _format_table(rows: list, max_rows: int = 10) -> str:
+#     if not rows:
+#         return ""
+    
+#     display_rows = rows[:max_rows]
+#     table = tabulate(
+#         [list(row.values()) for row in display_rows],
+#         headers=list(rows[0].keys()),
+#         tablefmt="simple",  # 슬랙 코드블록에서 가장 깔끔
+#     )
+    
+#     if len(rows) > max_rows:
+#         table += f"\n... 외 {len(rows) - max_rows}개 행"
+    
+#     return table
 
-    if len(rows) > max_rows:
-        lines.append(f"... 외 {len(rows) - max_rows}개 행")
-
-    return "\n".join(lines)
-
+def _format_sql(sql: str) -> str:
+    return sqlparse.format(
+        sql,
+        reindent=True,
+        keyword_case="upper",
+        indent_width=2,
+    )
 
 def _build_blocks(user_id: str, question: str, result: dict) -> list:
     """Slack Block Kit 메시지 구성"""
@@ -86,7 +120,7 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": "⏳ *요청이 너무 많아요!*\n잠시 후 다시 시도해주세요. (분당 5개 질문 제한)"
+                "text": ":snad-clock: *요청이 너무 많습니다.*\n잠시 후 다시 시도해주세요. (분당 5개 질문 제한 - Free Edition)"
             }
         })
         return blocks
@@ -95,7 +129,7 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
     if result.get("error") == "timeout":
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": "⏱️ 응답 시간이 초과됐어요. 다시 시도해주세요."}
+            "text": {"type": "mrkdwn", "text": ":loading-mac: 응답 시간이 초과됐어요. 다시 시도해주세요."}
         })
         return blocks
 
@@ -103,15 +137,16 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
     if result.get("error"):
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"❌ 오류가 발생했어요:\n```{result['error']}```"}
+            "text": {"type": "mrkdwn", "text": f":alert: 오류가 발생했어요:\n```{result['error']}```"}
         })
         return blocks
 
     # ── 텍스트 답변 ───────────────────────────────────
     if result.get("text"):
+        quoted_text = "\n> ".join(result['text'].split('\n'))
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"🧞 *Genie의 답변*\n{result['text']}"}
+            "text": {"type": "mrkdwn", "text": f":genie-gif: *Genie의 답변*\n> {quoted_text}"}
         })
 
     # ── 쿼리 + 결과 ───────────────────────────────────
@@ -119,15 +154,9 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
         query = result["query"]
         blocks.append({"type": "divider"})
 
-        if query.get("description"):
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"📊 *{query['description']}*"}
-            })
-
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*생성된 SQL*\n```{query.get('sql', '')}```"}
+            "text": {"type": "mrkdwn", "text": f"*생성된 SQL*\n```{_format_sql(query.get('sql', ''))}```"}
         })
 
         rows = result.get("query_result") or []
@@ -143,6 +172,17 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
                 "text": {"type": "mrkdwn", "text": "_조회 결과가 없거나 가져오지 못했어요._"}
             })
 
+        if query.get("description"):
+            blocks.append({
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f":old-man-yells-at-databricks: _{query['description']}_"
+                    }
+                ]
+            })
+
     # ── 추천 질문 ─────────────────────────────────────
     if result.get("suggested_questions"):
         blocks.append({"type": "divider"})
@@ -151,7 +191,7 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"💡 *이런 것도 물어볼 수 있어요*\n{questions_text}"
+                "text": f":eyes-gif: *추가로 분석해 볼 만한 질문들*\n{questions_text}"
             }
         })
 
@@ -170,41 +210,45 @@ async def handle_slash_command(
     if not text.strip():
         await slack_client.chat_postMessage(
             channel=channel_id,
-            text="❓ 질문을 입력해주세요.\n예: `/지니 오늘 거래량 상위 종목은?`",
+            text=":question-face: 질문을 입력해주세요.\n예: `/지니 오늘 거래량 상위 종목은?`",
         )
         return
 
-    # 처리 중 메시지 (스레드 부모)
+    # 1. 처리 중 메시지 전송
     response = await slack_client.chat_postMessage(
         channel=channel_id,
-        blocks=[
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*<@{user_id}>님의 질문*\n> {text}"}
-            },
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "⏳ Genie가 분석 중이에요..."}
-            }
-        ],
-        text=f"{text} - 분석 중...",
+        blocks=_loading_blocks(user_id, text),
+        text="Databricks 테이블 분석 중 :loading-dots:",
     )
-    thread_ts = response["ts"]
+    msg_ts = response["ts"]
 
     try:
         result = await genie_client.ask(text)
         blocks = _build_blocks(user_id, text, result)
-        await slack_client.chat_postMessage(
+
+        # 2. 같은 메시지를 결과로 업데이트
+        await slack_client.chat_update(
             channel=channel_id,
-            thread_ts=thread_ts,
+            ts=msg_ts,
             blocks=blocks,
             text=result.get("text") or "Genie 답변",
         )
     except Exception as e:
-        await slack_client.chat_postMessage(
+        await slack_client.chat_update(
             channel=channel_id,
-            thread_ts=thread_ts,
-            text=f"❌ 오류가 발생했어요: {str(e)}",
+            ts=msg_ts,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*<@{user_id}>님의 질문*\n> {text}"}
+                },
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f":alert: 오류가 발생했어요: {str(e)}"}
+                }
+            ],
+            text=f"오류: {str(e)}",
         )
 
 
@@ -221,42 +265,44 @@ async def handle_mention(
         await slack_client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
-            text="❓ 질문을 입력해주세요.\n예: `@Databricks Genie 오늘 거래량 상위 종목은?`",
+            text=":question-face: 질문을 입력해주세요.\n예: `@Databricks Genie 오늘 거래량 상위 종목은?`",
         )
         return
 
-    await slack_client.chat_postMessage(
+    # 1. 처리 중 메시지 전송 (스레드에)
+    response = await slack_client.chat_postMessage(
         channel=channel_id,
         thread_ts=thread_ts,
-        blocks=[
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*<@{user_id}>님의 질문*\n> {text}"}
-            },
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "⏳ Genie가 분석 중이에요..."}
-            }
-        ],
-        text=f"{text} - 분석 중...",
+        blocks=_loading_blocks(user_id, text),
+        text="Databricks 테이블 분석 중 :loading-dots:",
     )
+    msg_ts = response["ts"]
 
     try:
         result = await genie_client.ask(text)
-        print(f"DEBUG mention result: {result}")
         blocks = _build_blocks(user_id, text, result)
-        await slack_client.chat_postMessage(
+
+        # 2. 같은 메시지를 결과로 업데이트
+        await slack_client.chat_update(
             channel=channel_id,
-            thread_ts=thread_ts,
+            ts=msg_ts,
             blocks=blocks,
             text=result.get("text") or "Genie 답변",
         )
     except Exception as e:
-        print(f"DEBUG mention error: {e}")
-        import traceback
-        traceback.print_exc()
-        await slack_client.chat_postMessage(
+        await slack_client.chat_update(
             channel=channel_id,
-            thread_ts=thread_ts,
-            text=f"❌ 오류가 발생했어요: {str(e)}",
+            ts=msg_ts,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*<@{user_id}>님의 질문*\n> {text}"}
+                },
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f":alert: 오류가 발생했어요: {str(e)}"}
+                }
+            ],
+            text=f"오류: {str(e)}",
         )

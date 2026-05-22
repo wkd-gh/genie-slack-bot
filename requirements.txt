@@ -5,3 +5,5 @@ slack-sdk==3.31.0
 python-dotenv==1.0.1
 python-multipart==0.0.9
 aiohttp==3.10.11
+sqlparse==0.5.0
+tabulate==0.9.0
