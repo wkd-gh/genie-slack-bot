@@ -192,3 +192,4 @@ Bot Token Scopes 추가:
 ## Related
 
 - [airflow-etl-pipeline](https://github.com/Money-Digger/airflow-etl-pipeline) — 데이터 수집 및 Databricks 적재 파이프라인
+- [genie-web-app](https://github.com/Money-Digger/genie-web-app.git) — Databricks Genie 웹 애플리케이션
