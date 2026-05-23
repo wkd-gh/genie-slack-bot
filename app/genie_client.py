@@ -130,11 +130,10 @@ class GenieClient:
         """쿼리 결과 가져오기 (별도 API 호출)"""
         try:
             url = f"{self.base_url}/conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}/query-result"
-            print(f"DEBUG query-result URL: {url}")
+            # print(f"DEBUG query-result URL: {url}")
             response = await client.get(url, headers=self.headers)
-            print(f"DEBUG query-result status: {response.status_code}")
-            # print(f"DEBUG query-result response: {response.text[:500]}")
-            print(f"DEBUG query-result response: {response.text}")  # [:500] 제거
+            # print(f"DEBUG query-result status: {response.status_code}")
+            # print(f"DEBUG query-result response: {response.text}")
 
             if response.status_code != 200:
                 return []
@@ -148,13 +147,9 @@ class GenieClient:
                 .get("schema", {})
                 .get("columns", [])
             ]
-            # rows_raw = statement_response.get("result", {}).get("data_typed_array", [])
             rows_raw = statement_response.get("result", {}).get("data_array", [])
 
             rows = []
-            # for row in rows_raw:
-            #     values = [v.get("str", "") for v in row.get("values", [])]
-            #     rows.append(dict(zip(columns, values)))
             for row in rows_raw:
                 rows.append(dict(zip(columns, row)))
 

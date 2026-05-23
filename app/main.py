@@ -56,6 +56,7 @@ async def sql_ask(request: Request, background_tasks: BackgroundTasks):
     # Slack에 즉시 빈 응답 (처리 중 메시지는 background에서 전송)
     return {"response_type": "in_channel", "text": ""}
 
+
 @app.post("/slack/mention")
 async def mention(request: Request, background_tasks: BackgroundTasks):
     raw_body = await request.body()
