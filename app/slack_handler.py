@@ -104,6 +104,8 @@ def _format_sql(sql: str) -> str:
 def _to_slack_mrkdwn(text: str) -> str:
     # **bold** → *bold*
     text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
+    # *bold* → *bold*
+    text = re.sub(r'\*(.+?)\*', r'*\1*', text)
     # ### 헤더 → *헤더*
     text = re.sub(r'#{1,6}\s+(.+)', r'*\1*', text)
     # - 리스트 → • 리스트
