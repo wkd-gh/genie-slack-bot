@@ -130,7 +130,7 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": ":snad-clock: *요청이 너무 많습니다.*\n잠시 후 다시 시도해주세요. (분당 5개 질문 제한 - Free Edition)"
+                "text": "*요청이 너무 많습니다.* :snad-clock:\n잠시 후 다시 시도해주세요. (분당 5개 질문 제한 - Free Edition)"
             }
         })
         return blocks
@@ -139,7 +139,7 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
     if result.get("error") == "timeout":
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": ":loading-mac: 응답 시간이 초과됐어요. 다시 시도해주세요."}
+            "text": {"type": "mrkdwn", "text": "응답 시간이 초과됐어요. 다시 시도해주세요. :loading-mac:"}
         })
         return blocks
 
@@ -157,7 +157,7 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
         quoted_text = "\n> ".join(converted.split('\n'))
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f":genie-gif: *Genie의 답변*\n> {quoted_text}"}
+            "text": {"type": "mrkdwn", "text": f"*Genie의 답변* :genie-gif:\n> {quoted_text}"}
         })
 
     # ── 쿼리 + 결과 ───────────────────────────────────
@@ -189,7 +189,7 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
                 "elements": [
                     {
                         "type": "mrkdwn",
-                        "text": f":old-man-yells-at-databricks: _{query['description']}_"
+                        "text": f"_{query['description']}_ :old-man-yells-at-databricks:"
                     }
                 ]
             })
@@ -202,7 +202,7 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f":eyes-gif: *추가로 분석해 볼 만한 질문들*\n{questions_text}"
+                "text": f"*추가로 분석해 볼 만한 질문들* :eyes-gif:\n{questions_text}"
             }
         })
 
@@ -221,7 +221,7 @@ async def handle_slash_command(
     if not text.strip():
         await slack_client.chat_postMessage(
             channel=channel_id,
-            text=":question-face: 질문을 입력해주세요.\n예: `/지니 오늘 거래량 상위 종목은?`",
+            text="질문을 입력해주세요. :question-face:\n예: `/지니 오늘 거래량 상위 종목은?`",
         )
         return
 
@@ -276,7 +276,7 @@ async def handle_mention(
         await slack_client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
-            text=":question-face: 질문을 입력해주세요.\n예: `@Databricks 오늘 거래량 상위 종목은?`",
+            text="질문을 입력해주세요. :question-face:\n예: `@Databricks 오늘 거래량 상위 종목은?`",
         )
         return
 
