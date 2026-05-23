@@ -1,6 +1,7 @@
 import hmac
 import hashlib
 import time
+import re
 import os
 import ssl
 import sqlparse
@@ -100,6 +101,15 @@ def _format_sql(sql: str) -> str:
         indent_width=2,
     )
 
+def _to_slack_mrkdwn(text: str) -> str:
+    # **bold** → *bold*
+    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
+    # ### 헤더 → *헤더*
+    text = re.sub(r'#{1,6}\s+(.+)', r'*\1*', text)
+    # - 리스트 → • 리스트
+    text = re.sub(r'^\s*-\s+', '• ', text, flags=re.MULTILINE)
+    return text
+
 def _build_blocks(user_id: str, question: str, result: dict) -> list:
     """Slack Block Kit 메시지 구성"""
     blocks = []
@@ -143,7 +153,8 @@ def _build_blocks(user_id: str, question: str, result: dict) -> list:
 
     # ── 텍스트 답변 ───────────────────────────────────
     if result.get("text"):
-        quoted_text = "\n> ".join(result['text'].split('\n'))
+        converted = _to_slack_mrkdwn(result['text'])
+        quoted_text = "\n> ".join(converted.split('\n'))
         blocks.append({
             "type": "section",
             "text": {"type": "mrkdwn", "text": f":genie-gif: *Genie의 답변*\n> {quoted_text}"}
@@ -265,7 +276,7 @@ async def handle_mention(
         await slack_client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
-            text=":question-face: 질문을 입력해주세요.\n예: `@Databricks Genie 오늘 거래량 상위 종목은?`",
+            text=":question-face: 질문을 입력해주세요.\n예: `@Databricks 오늘 거래량 상위 종목은?`",
         )
         return
 
