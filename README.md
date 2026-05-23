@@ -21,7 +21,7 @@ Slack에서 두 가지 방식으로 Databricks Genie에게 질문할 수 있습�
 
 **@멘션**
 ```
-@Genie SK하이닉스 최근 5일 종가 알려줘
+@Databricks SK하이닉스 최근 5일 종가 알려줘
 ```
 
 Genie가 SQL을 생성하고 데이터를 조회해서 스레드로 답변해줍니다.
@@ -60,9 +60,10 @@ FastAPI (Cloud Run)
       │  ② 백그라운드에서 Genie API 호출
       ▼
 Databricks Genie API
-      │  Text2SQL → 쿼리 실행 → 결과 반환
+      │  start-conversation → 폴링 (2초 간격, 최대 30회/60초)
+      │  COMPLETED 시 쿼리 결과 별도 API 호출
       ▼
-FastAPI → Slack 스레드에 Block Kit 메시지로 답변
+FastAPI → "분석 중..." 메시지를 Block Kit 결과로 인플레이스 업데이트
 ```
 
 ### 응답 구조
@@ -71,10 +72,20 @@ Genie 응답은 아래 4가지 요소로 구성됩니다.
 
 | 요소 | 설명 |
 |------|------|
-| `text` | 자연어 답변 텍스트 |
-| `query` | 생성된 SQL + 설명 |
-| `query_result` | 실제 쿼리 조회 결과 (테이블) |
+| `text` | 자연어 답변 텍스트 (Markdown → Slack mrkdwn 자동 변환) |
+| `query` | 생성된 SQL + 설명 (sqlparse로 포맷팅) |
+| `query_result` | 실제 쿼리 조회 결과 (최대 2500자 기준 행 수 자동 조절) |
 | `suggested_questions` | Genie가 제안하는 추천 질문 목록 |
+| `error` | 에러 유형: `rate_limit` / `timeout` / 기타 메시지 |
+
+### 에러 처리
+
+| 상황 | 메시지 |
+|------|--------|
+| `rate_limit` (429) | "요청이 너무 많습니다. 잠시 후 다시 시도해주세요." |
+| `timeout` (60초 초과) | "응답 시간이 초과됐어요. 다시 시도해주세요." |
+| `FAILED` / `CANCELLED` | Genie 오류 메시지 표시 |
+| 빈 질문 | 예시 문구와 함께 안내 메시지 전송 |
 
 ---
 
